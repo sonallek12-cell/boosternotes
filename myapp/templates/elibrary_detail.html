@@ -157,6 +157,21 @@
     border-radius: 999px;
   }
 
+  /* Demo badge */
+  .demo-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #fff7ed;
+    color: #c05621;
+    border: 1px solid #fbd38d;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 999px;
+    margin-left: 8px;
+  }
+
   /* Action buttons (same style as search_results buy/cart buttons) */
   .elib-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .buy-btn-search {
@@ -224,6 +239,10 @@
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
+  }
+  .pdf-item.demo-item {
+    border-color: #fbd38d;
+    background: #fffbf0;
   }
   .pdf-item-name { font-weight: 700; color: #1a1a2e; font-size: 0.9rem; }
   .pdf-item-date { font-size: 0.72rem; color: #999; margin-top: 3px; }
@@ -352,12 +371,16 @@
       <span>{{ uploaded_pdfs|length }} File{{ uploaded_pdfs|length|pluralize }}</span>
     </h3>
 
-    {% if is_purchased %}
-      {% if uploaded_pdfs %}
-        {% for file in uploaded_pdfs %}
-          <div class="pdf-item">
+    {# ── Demo PDFs: always visible to everyone ─────────────────────────── #}
+    {% with demo_pdfs=uploaded_pdfs|dictsort:"uploaded_at" %}
+      {% for file in uploaded_pdfs %}
+        {% if file.is_demo %}
+          <div class="pdf-item demo-item">
             <div>
-              <div class="pdf-item-name">{{ file.pdf_name }}</div>
+              <div class="pdf-item-name">
+                {{ file.pdf_name }}
+                <span class="demo-badge">🆓 Free Demo</span>
+              </div>
               <div class="pdf-item-date">Uploaded: {{ file.uploaded_at|date:"d M Y, h:i A" }}</div>
             </div>
             {% if file.pdf_file %}
@@ -369,29 +392,58 @@
               <span style="font-size:.8rem;color:#c00;">File unavailable</span>
             {% endif %}
           </div>
+        {% endif %}
+      {% endfor %}
+    {% endwith %}
+
+    {# ── Purchased users see all PDFs ─────────────────────────────────── #}
+    {% if is_purchased %}
+      {% if uploaded_pdfs %}
+        {% for file in uploaded_pdfs %}
+          {% if not file.is_demo %}
+            <div class="pdf-item">
+              <div>
+                <div class="pdf-item-name">{{ file.pdf_name }}</div>
+                <div class="pdf-item-date">Uploaded: {{ file.uploaded_at|date:"d M Y, h:i A" }}</div>
+              </div>
+              {% if file.pdf_file %}
+                <div>
+                  <a href="{{ file.pdf_file.url }}" target="_blank" class="pdf-btn">👁 View</a>
+                  <a href="{{ file.pdf_file.url }}" download class="pdf-btn dl">⬇ Download</a>
+                </div>
+              {% else %}
+                <span style="font-size:.8rem;color:#c00;">File unavailable</span>
+              {% endif %}
+            </div>
+          {% endif %}
         {% endfor %}
       {% else %}
         <div class="empty-pdfs">📭 No PDFs uploaded yet for this course. Check back soon!</div>
       {% endif %}
 
+    {# ── Authenticated but not purchased: show lock for non-demo PDFs ─── #}
     {% elif request.user.is_authenticated %}
-      <div class="locked-overlay">
-        <div style="font-size:2.5rem;margin-bottom:8px;">🔒</div>
-        <div style="font-size:1rem;font-weight:700;color:#1a1a2e;margin-bottom:8px;">Content Locked</div>
-        <div class="lock-text">Purchase this course to unlock {{ uploaded_pdfs|length }} PDF{% if uploaded_pdfs|length != 1 %}s{% endif %}.</div>
-        <form method="post" action="{% url 'add_to_cart' %}" style="display:inline;">
-          {% csrf_token %}
-          <input type="hidden" name="item_id" value="{{ pdf.id }}">
-          <input type="hidden" name="item_type" value="pdf">
-          <input type="hidden" name="redirect_to" value="checkout">
-          <button type="submit" class="buy-btn-search" style="max-width:260px;margin:0 auto;">🔓 Buy to Unlock — ₹{{ pdf.current_price|floatformat:0 }}</button>
-        </form>
-      </div>
+      {% with non_demo_count=uploaded_pdfs|length %}
+        <div class="locked-overlay">
+          <div style="font-size:2.5rem;margin-bottom:8px;">🔒</div>
+          <div style="font-size:1rem;font-weight:700;color:#1a1a2e;margin-bottom:8px;">Content Locked</div>
+          <div class="lock-text">Purchase this course to unlock all PDFs.</div>
+          <form method="post" action="{% url 'add_to_cart' %}" style="display:inline;">
+            {% csrf_token %}
+            <input type="hidden" name="item_id" value="{{ pdf.id }}">
+            <input type="hidden" name="item_type" value="pdf">
+            <input type="hidden" name="redirect_to" value="checkout">
+            <button type="submit" class="buy-btn-search" style="max-width:260px;margin:0 auto;">🔓 Buy to Unlock — ₹{{ pdf.current_price|floatformat:0 }}</button>
+          </form>
+        </div>
+      {% endwith %}
+
+    {# ── Anonymous users ────────────────────────────────────────────────── #}
     {% else %}
       <div class="locked-overlay">
         <div style="font-size:2.5rem;margin-bottom:8px;">🔒</div>
         <div style="font-size:1rem;font-weight:700;color:#1a1a2e;margin-bottom:8px;">Login Required</div>
-        <div class="lock-text">Please login and purchase this course to access the PDFs.</div>
+        <div class="lock-text">Please login and purchase this course to access all PDFs.</div>
         <a href="{% url 'login' %}?next={{ request.path }}" class="buy-btn-search" style="max-width:200px;margin:0 auto;">🔑 Login to Buy</a>
       </div>
     {% endif %}

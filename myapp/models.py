@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -285,6 +287,12 @@ class ELibraryPDF(models.Model):
     pdf_file = models.FileField(upload_to='elibrary/pdfs/')
     dropbox_path = models.CharField(max_length=500, blank=True, null=True)
     is_active = models.BooleanField(default=True)
+    # ── NEW: mark a PDF as a free demo accessible without purchase ────────────
+    is_demo = models.BooleanField(
+        default=False,
+        verbose_name='Free Demo',
+        help_text='Tick this to make the PDF freely accessible to all visitors as a demo preview.'
+    )
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
