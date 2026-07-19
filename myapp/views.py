@@ -20,6 +20,7 @@ from .models import *
 from .forms import *
 
 from .dropbox_utils import DropboxManager
+from .pdf_utils import compress_pdf, human_size
 import os
 from django.core.files.base import ContentFile
 
@@ -428,21 +429,59 @@ from django.conf import settings
 
 @login_required
 def elibrary_upload_pdf(request, pk):
+    """
+    Upload a PDF for an eLibrary course.
+    The file is compressed (losslessly) before being sent to Dropbox.
+    The admin sees the before/after sizes in the success message.
+    """
     course = get_object_or_404(ELibraryModel, pk=pk)
     if request.method == 'POST':
         form = ELibraryPDFForm(request.POST, request.FILES)
         if form.is_valid():
-            pdf    = form.save(commit=False)
-            pdf.course = course
-            result = DropboxManager.upload_file(request.FILES['pdf_file'], request.FILES['pdf_file'].name, f"{settings.DROPBOX_FOLDER}/pdfs/{course.id}")
+            uploaded_file = request.FILES['pdf_file']
+            original_name = uploaded_file.name
+
+            # ── Compress the PDF in-memory before upload ────────────────────────
+            compressed_bytes, orig_size, comp_size, method = compress_pdf(uploaded_file)
+            saved_pct = round((1 - comp_size / orig_size) * 100) if orig_size else 0
+
+            # Wrap the compressed bytes back into a file-like object that
+            # DropboxManager and Django's storage layer both understand.
+            compressed_file = ContentFile(compressed_bytes, name=original_name)
+            # DropboxManager reads .size; ContentFile exposes .size via len()
+            compressed_file.size = comp_size
+
+            # ── Upload to Dropbox ───────────────────────────────────────────
+            result = DropboxManager.upload_file(
+                compressed_file,
+                original_name,
+                f"{settings.DROPBOX_FOLDER}/pdfs/{course.id}"
+            )
+
             if result['success']:
+                pdf = form.save(commit=False)
+                pdf.course       = course
                 pdf.dropbox_path = result['dropbox_path']
                 pdf.save()
-                messages.success(request, 'PDF uploaded successfully!')
-                return redirect('elibrary_upload_pdf', pk=course.pk)
-            messages.error(request, f"Dropbox upload failed: {result['error']}")
+
+                if method == 'passthrough' or saved_pct <= 0:
+                    messages.success(
+                        request,
+                        f'\u2705 PDF uploaded successfully! ({human_size(orig_size)} — already optimal, no compression needed)'
+                    )
+                else:
+                    messages.success(
+                        request,
+                        f'\u2705 PDF uploaded & compressed via {method}! '
+                        f'{human_size(orig_size)} \u2192 {human_size(comp_size)} '
+                        f'(saved {saved_pct}\u00a0%)'
+                    )
+                return JsonResponse({'success': True, 'redirect': f"/elibrary/upload/{course.pk}/"})
+            else:
+                messages.error(request, f"Dropbox upload failed: {result['error']}")
+                return JsonResponse({'error': result['error']}, status=500)
         else:
-            messages.error(request, 'Please correct the errors below.')
+            return JsonResponse({'error': str(form.errors)}, status=400)
     else:
         form = ELibraryPDFForm()
     return render(request, 'elibrary/upload_pdf.html', {'form': form, 'course': course})
@@ -758,7 +797,6 @@ def delete_user(request, user_id):
         username = user.username
         user.delete()
         messages.success(request, f'User {username} deleted!')
-        # FIX: 'users_section' URL does not exist — redirect to dashboard (Signups section)
         return redirect('dashboard')
     return redirect('dashboard')
 
@@ -794,7 +832,6 @@ def home(request):
         coupon_qs = coupon_qs.exclude(id__in=used_ids)
     active_coupons = coupon_qs.order_by('-created_at')[:6]
 
-    # ALL active categories shown — no limit, no cache, always fresh from DB
     categories = list(
         Category.objects.filter(is_active=True)
         .annotate(pdf_count=Count('elibrary_courses'))
@@ -860,8 +897,6 @@ def elibrary_detail(request, pk):
 
     uploaded_pdfs = course.pdfs.all()
 
-    # Mark each PDF so the template knows whether it can be shown freely
-    # (is_purchased grants access to all; is_demo grants access to that PDF only)
     for pdf in uploaded_pdfs:
         pdf.can_access = is_purchased or pdf.is_demo
 
@@ -875,11 +910,7 @@ def elibrary_detail(request, pk):
     })
 
 
-# ── Apply Coupon (homepage "Save to Cart" button) ───────────────────────────────
-# This view ONLY saves the coupon code to the session so it pre-fills
-# the cart coupon field. It does NOT write CouponUsage to the database.
-# The actual DB write (CouponUsage + times_used increment) happens only
-# when payment is successfully verified in razorpay_views.
+# ── Apply Coupon (homepage “Save to Cart” button) ───────────────────────────────
 @login_required
 @require_POST
 def apply_coupon(request):
@@ -908,7 +939,6 @@ def apply_coupon(request):
         messages.warning(request, '\u26a0\ufe0f You have already used this coupon.')
         return redirect(redirect_url)
 
-    # ── Save to session only (no DB write here) ──────────────────────────────
     request.session['applied_coupon_id']     = coupon.id
     request.session['applied_coupon_code']   = coupon.code
     request.session['applied_coupon_amount'] = str(coupon.amount)
