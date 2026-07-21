@@ -934,8 +934,9 @@ def elibrary_pdf_preview(request, pdf_id):
     exposed to the client, so no login wall can appear.
 
     Access rules:
-      - is_demo=True or first PDF of course → public (no login needed)
-      - all others  → authenticated + paid order required
+      - is_staff / is_superuser     → always granted (admin preview)
+      - is_demo=True or first PDF   → public (no login needed)
+      - all others                  → authenticated + paid order required
 
     Error handling:
       ANY failure while fetching the file from Dropbox or from the local
@@ -943,38 +944,43 @@ def elibrary_pdf_preview(request, pdf_id):
       missing path, etc.) is caught and returns a user-friendly 503 page.
       No traceback or internal path is ever exposed to the browser.
 
-    ?dl=1  → Content-Disposition: attachment (download)
-    default → Content-Disposition: inline   (open in browser)
+    ?dl=1  -> Content-Disposition: attachment (download)
+    default -> Content-Disposition: inline   (open in browser)
     """
     from .models import OrderItem
 
     pdf = get_object_or_404(ELibraryPDF, id=pdf_id, is_active=True)
 
-    # ── 1. First-PDF check ──────────────────────────────────────────────────
-    first_pdf_id = (
-        ELibraryPDF.objects
-        .filter(course=pdf.course, is_active=True)
-        .order_by('uploaded_at')
-        .values_list('id', flat=True)
-        .first()
-    )
-    is_first = str(first_pdf_id) == str(pdf_id)
+    # ── 1. Staff / superuser bypass — admins can always preview any PDF ────
+    if request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser):
+        can_access = True
+    else:
+        # ── 2. First-PDF check ──────────────────────────────────────────────
+        first_pdf_id = (
+            ELibraryPDF.objects
+            .filter(course=pdf.course, is_active=True)
+            .order_by('uploaded_at')
+            .values_list('id', flat=True)
+            .first()
+        )
+        is_first = str(first_pdf_id) == str(pdf_id)
 
-    # ── 2. Access check ────────────────────────────────────────────────────
-    can_access = pdf.is_demo or is_first
-    if not can_access:
-        if not request.user.is_authenticated:
-            raise Http404
-        can_access = OrderItem.objects.filter(
-            order__user=request.user,
-            order__is_paid=True,
-            item_type='pdf',
-            item_id=str(pdf.course_id)
-        ).exists()
+        # ── 3. Access check ────────────────────────────────────────────────
+        can_access = pdf.is_demo or is_first
+        if not can_access:
+            if not request.user.is_authenticated:
+                raise Http404
+            can_access = OrderItem.objects.filter(
+                order__user=request.user,
+                order__is_paid=True,
+                item_type='pdf',
+                item_id=str(pdf.course_id)
+            ).exists()
+
     if not can_access:
         raise Http404
 
-    # ── 3. Disposition header ───────────────────────────────────────────────
+    # ── 4. Disposition header ───────────────────────────────────────────────
     force_download = request.GET.get('dl') == '1'
     raw_name   = pdf.pdf_name or 'document'
     filename   = raw_name if raw_name.lower().endswith('.pdf') else raw_name + '.pdf'
@@ -984,19 +990,16 @@ def elibrary_pdf_preview(request, pdf_id):
         f'inline; filename="{filename}"'
     )
 
-    # ── 4. Source A: Dropbox ─────────────────────────────────────────────────
+    # ── 5. Source A: Dropbox ─────────────────────────────────────────────────
     if pdf.dropbox_path:
         try:
             dbx  = DropboxManager.get_dropbox_client()
             path = pdf.dropbox_path if pdf.dropbox_path.startswith('/') else '/' + pdf.dropbox_path
 
-            # ── Eagerly download the entire file before building the response.
+            # Eagerly download the entire file before building the response.
             # This guarantees that ANY exception (FileNotFoundError, ApiError,
             # network timeout, quota exceeded, etc.) is raised HERE, inside
             # this try/except block, and can be turned into a clean error page.
-            # A lazy StreamingHttpResponse would raise the exception inside the
-            # WSGI iterator — after the response is already returned — making
-            # it impossible to catch and render a friendly page instead.
             _metadata, response = dbx.files_download(path)
             pdf_bytes = response.content   # reads all bytes; raises on any failure
 
@@ -1006,11 +1009,11 @@ def elibrary_pdf_preview(request, pdf_id):
             return http_response
 
         except Exception:
-            # ── Fall through to local-file fallback, then to the
+            # Fall through to local-file fallback, then to the
             # user-friendly unavailable page.
             pass
 
-    # ── 4b. Source B: local FileField (dev / fallback) ──────────────────────
+    # ── 5b. Source B: local FileField (dev / fallback) ──────────────────────
     if pdf.pdf_file:
         try:
             from django.http import FileResponse
@@ -1020,11 +1023,11 @@ def elibrary_pdf_preview(request, pdf_id):
         except Exception:
             pass
 
-    # ── 5. Both sources failed — show the user-friendly error page ──────────
+    # ── 6. Both sources failed — show the user-friendly error page ──────────
     return _pdf_unavailable_response(request, pdf_name=pdf.pdf_name)
 
 
-# ── Apply Coupon (homepage “Save to Cart” button) ───────────────────────────────
+# ── Apply Coupon (homepage "Save to Cart" button) ───────────────────────────────
 @login_required
 @require_POST
 def apply_coupon(request):

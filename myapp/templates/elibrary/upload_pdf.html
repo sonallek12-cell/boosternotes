@@ -101,12 +101,8 @@
                 {% endif %}
               </td>
               <td>
-                {% if pdf.dropbox_path %}
-                <a href="https://www.dropbox.com/home{{ pdf.dropbox_path }}" target="_blank" class="btn btn-small btn-view">
-                  <i class="fa-solid fa-eye"></i> Open
-                </a>
-                {% elif pdf.pdf_file %}
-                <a href="{{ pdf.pdf_file.url }}" target="_blank" class="btn btn-small btn-view">
+                {% if pdf.dropbox_path or pdf.pdf_file %}
+                <a href="{% url 'elibrary_pdf_preview' pdf.id %}" target="_blank" class="btn btn-small btn-view">
                   <i class="fa-solid fa-eye"></i> View
                 </a>
                 {% else %}
